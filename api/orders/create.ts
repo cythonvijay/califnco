@@ -4,7 +4,18 @@ import { computeTotals, effectiveRetailPaise, isProductPublished, orderRequestSc
 import { adminDb, HttpError } from '../_lib/firebase';
 import { authenticate, route } from '../_lib/http';
 
-const rzp = () => (process.env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') && process.env.RAZORPAY_KEY_SECRET ? { id: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET } : null);
+type RazorpayCredentials = { id: string; secret: string; mode: 'test' | 'live' };
+
+const rzp = (): RazorpayCredentials | null => {
+  const id = process.env.RAZORPAY_KEY_ID?.trim() ?? '';
+  const secret = process.env.RAZORPAY_KEY_SECRET?.trim() ?? '';
+  const mode = id.startsWith('rzp_test_') ? 'test' : id.startsWith('rzp_live_') ? 'live' : null;
+  return mode && secret ? { id, secret, mode } : null;
+};
+
+function isProductionDeployment() {
+  return process.env.VERCEL_ENV === 'production';
+}
 
 function publicBaseUrl() {
   const configured = process.env.APP_BASE_URL?.trim();
@@ -14,8 +25,7 @@ function publicBaseUrl() {
   return value;
 }
 
-async function createRazorpayPaymentLink(amount: number, orderId: string, k: { id: string; secret: string }, customer: { name?: string; email?: string; contact?: string }) {
-  const baseUrl = publicBaseUrl();
+async function createRazorpayPaymentLink(baseUrl: string, amount: number, orderId: string, k: RazorpayCredentials, customer: { name?: string; email?: string; contact?: string }) {
   const r = await fetch('https://api.razorpay.com/v1/payment_links', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Basic ' + Buffer.from(`${k.id}:${k.secret}`).toString('base64') },
@@ -38,15 +48,24 @@ export default route('POST', async (req) => {
   const errs = validateLines(body.lines, role);
   if (errs.length) throw new HttpError(400, errs[0]!.message);
 
+  const key = rzp();
+  if (isProductionDeployment() && !key) {
+    throw new HttpError(
+      503,
+      'Razorpay is not configured for this production deployment. Set RAZORPAY_KEY_ID to a valid rzp_test_ or rzp_live_ key and set the matching RAZORPAY_KEY_SECRET. No demo order was created.',
+    );
+  }
+  // Validate callback configuration before changing stock or creating an order.
+  const callbackBase = key ? publicBaseUrl() : null;
+
   const db = adminDb();
   // Deterministic ID => a retry or double click with the same key can never create a second order.
   const orderId = 'ord_' + createHash('sha256').update(`${caller.uid}:${body.idempotencyKey}`).digest('hex').slice(0, 24);
   const ref = db.doc(`orders/${orderId}`);
 
-  let created = false;
-  const order = await db.runTransaction(async (tx) => {
-    const existing = await ref.get();
-    if (existing.exists) return existing.data()!;
+  const transactionResult = await db.runTransaction(async (tx) => {
+    const existing = await tx.get(ref);
+    if (existing.exists) return { order: existing.data() as Record<string, any>, created: false };
     const priced: PricedLine[] = [];
     const prodSnaps = await Promise.all(body.lines.map((l) => tx.get(db.doc(`products/${l.sku}`))));
     const dealerSnaps = role === 'dealer' ? await Promise.all(body.lines.map((l) => tx.get(db.doc(`dealerPrices/${l.sku}`)))) : [];
@@ -61,31 +80,32 @@ export default route('POST', async (req) => {
     });
     body.lines.forEach((l, i) => tx.update(prodSnaps[i]!.ref, { stock: FieldValue.increment(-l.qty) }));
     const totals = computeTotals(priced, role);
-    const key = rzp();
-    const doc = {
+    const document = {
       uid: caller.uid, email: caller.email ?? null, role, lines: priced, totals, address: body.address,
       status: key ? 'pending_payment' : 'placed',
-      payment: key ? { provider: 'razorpay_payment_link_test', status: 'pending' } : { provider: 'demo', status: 'demo_unverified' },
+      payment: key
+        ? { provider: `razorpay_payment_link_${key.mode}`, status: 'pending' }
+        : { provider: 'demo', status: 'demo_unverified' },
       createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     };
-    tx.set(ref, doc);
-    created = true;
-    return doc as Record<string, any>;
+    tx.set(ref, document);
+    return { order: document as Record<string, any>, created: true };
   });
 
-  const key = rzp();
+  const order = transactionResult.order;
+  const created = transactionResult.created;
   let paymentLink: { id: string; short_url: string } | undefined = order.payment?.razorpayPaymentLinkId && order.payment?.paymentUrl
     ? { id: order.payment.razorpayPaymentLinkId, short_url: order.payment.paymentUrl }
     : undefined;
   if (key && order.status === 'pending_payment' && !paymentLink) {
-    const link = await createRazorpayPaymentLink(order.totals.totalPaise, orderId, key, {
+    const link = await createRazorpayPaymentLink(callbackBase!, order.totals.totalPaise, orderId, key, {
       name: body.address.fullName, email: caller.email, contact: body.address.phone,
     });
     paymentLink = { id: link.id, short_url: link.short_url };
     await ref.update({
       'payment.razorpayPaymentLinkId': link.id,
       'payment.paymentUrl': link.short_url,
-      'payment.provider': 'razorpay_payment_link_test',
+      'payment.provider': `razorpay_payment_link_${key.mode}`,
       updatedAt: FieldValue.serverTimestamp(),
     });
   }
@@ -94,7 +114,7 @@ export default route('POST', async (req) => {
     await notify({ uid: caller.uid, email: caller.email, type: 'order', title: 'Demo order placed', body: `Order ${orderId} was placed using the demo checkout. No payment was taken.`, link: `/orders/${orderId}` });
   }
   return {
-    orderId, mode: key ? 'razorpay_payment_link_test' : 'demo', totalPaise: order.totals.totalPaise,
+    orderId, mode: key ? `razorpay_payment_link_${key.mode}` : 'demo', totalPaise: order.totals.totalPaise,
     paymentUrl: key ? paymentLink?.short_url ?? null : null,
   };
 });
