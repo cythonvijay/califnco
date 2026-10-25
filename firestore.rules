@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    // Role comes from a verified custom claim set by the Admin SDK, or an admin-provisioned role on users/{uid}.
+    function userDocRole() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && ('role' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : 'customer';
+    }
+    function role() {
+      return signedIn() && ('role' in request.auth.token)
+        ? request.auth.token.role
+        : userDocRole();
+    }
+    function isAdmin() { return role() == 'admin'; }
+    function isDealer() { return role() == 'dealer'; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function onlyKeys(keys) { return request.resource.data.keys().hasOnly(keys); }
+    function unchanged(keys) { return !request.resource.data.diff(resource.data).affectedKeys().hasAny(keys); }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      // Customers cannot write 'role' into their own profile document.
+      allow create: if isOwner(uid)
+        && onlyKeys(['displayName', 'email', 'phone', 'createdAt', 'prefs', 'referralCode', 'referredBy', 'fcmTokens'])
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if (isOwner(uid) && unchanged(['email', 'createdAt', 'referralCode', 'role'])
+        && onlyKeys(['displayName', 'email', 'phone', 'createdAt', 'prefs', 'referralCode', 'referredBy', 'fcmTokens']))
+        || isAdmin();
+      match /addresses/{id} {
+        allow read, write: if isOwner(uid) || isAdmin();
+      }
+    }
+
+    // Public retail catalogue. Only admins can create, update, archive, or delete products.
+    match /products/{sku} {
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && request.resource.data.pricePaise is int && request.resource.data.pricePaise > 0
+        && request.resource.data.stock is int && request.resource.data.stock >= 0
+        && request.resource.data.name is string && request.resource.data.name.size() > 0;
+      allow delete: if isAdmin();
+    }
+
+    // Wholesale prices live in a separate collection so they are strictly access-controlled.
+    match /dealerPrices/{sku} {
+      allow read: if isDealer() || isAdmin();
+      allow create, update: if isAdmin() && request.resource.data.pricePaise is int && request.resource.data.pricePaise > 0;
+      allow delete: if isAdmin();
+    }
+
+    match /carts/{uid} {
+      allow read, write: if isOwner(uid) && request.resource.data.keys().hasOnly(['lines', 'updatedAt'])
+        && request.resource.data.lines.size() <= 100;
+      allow delete: if isOwner(uid);
+    }
+
+    // Orders are created and mutated by the trusted API; admins can read all orders.
+    match /orders/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow write: if false;
+    }
+
+    // Applications: a signed-in user files their own; admins or the trusted backend can review.
+    match /dealerApplications/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid) && onlyKeys(['uid', 'businessName', 'gstin', 'phone', 'city', 'status', 'createdAt'])
+        && request.resource.data.status == 'pending' && request.resource.data.uid == uid;
+      allow update: if isAdmin() && unchanged(['uid', 'createdAt']);
+      allow delete: if false;
+    }
+
+    match /serviceBookings/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid
+        && request.resource.data.status == 'requested'
+        && onlyKeys(['uid', 'productSku', 'serviceType', 'contactName', 'contactPhone', 'address', 'preferredDate', 'preferredSlot', 'notes', 'status', 'assignedTo', 'createdAt'])
+        && request.resource.data.contactName is string && request.resource.data.contactName.size() >= 2;
+      allow update: if isAdmin() && unchanged(['uid', 'createdAt', 'address']);
+      allow delete: if false;
+    }
+
+    match /notifications/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      // Recipients may only flip the read flag.
+      allow update: if signedIn() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create, delete: if false;
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}

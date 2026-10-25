@@ -1,0 +1,44 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*serviceAccount*.json
+*-adminsdk-*.json
+.vercel
+.expo
+.firebase
+*.log
+
+.vercel
+.env*
+
+# Dependencies and generated builds
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/.expo/
+**/.vercel/
+coverage/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Private credentials and keys
+**/*service-account*.json
+**/*service_account*.json
+**/*firebase-adminsdk*.json
+**/*.pem
+**/*.key
+
+# Logs and operating-system files
+npm-debug.log*
+.DS_Store
+Thumbs.db

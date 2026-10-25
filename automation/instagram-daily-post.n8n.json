@@ -1,0 +1,655 @@
+{
+  "name": "Califnco - Daily AI Product Post (Instagram + WAHA WhatsApp Status)",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Daily 10:00 IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "2",
+      "name": "Read Products",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        -80
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.SHEET_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Products"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "3",
+      "name": "Read PostLog",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        80
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.SHEET_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "PostLog"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "4",
+      "name": "Select product (dedupe)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Duplicate-post prevention: stop if anything was already posted today (IST); else pick least-recently posted product.\nconst products = $('Read Products').all().map(i => i.json);\nconst log = $('Read PostLog').all().map(i => i.json).filter(r => r.sku);\nconst today = new Date(Date.now() + 5.5*3600e3).toISOString().slice(0,10);\nif (log.some(r => r.status === 'published' && String(r.timestamp).slice(0,10) === today)) return [];\nconst last = {};\nfor (const r of log) if (r.status === 'published') last[r.sku] = Math.max(last[r.sku] || 0, Date.parse(r.timestamp) || 0);\nconst eligible = products.filter(p => p.sku && p.name);\nif (!eligible.length) throw new Error('No eligible products found in the Products sheet');\neligible.sort((a,b) => (last[a.sku]||0) - (last[b.sku]||0));\nreturn [{ json: eligible[0] }];"
+      }
+    },
+    {
+      "id": "17",
+      "name": "Generate AI Product Image (Hugging Face)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.HF_MODEL_URL || 'https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.HF_API_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: 'Studio commercial product photograph of ' + $json.name + ' (' + $json.category + '), clean modern kitchen countertop, soft natural daylight, sharp appliance detail, photorealistic, 4k' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "neverError": true
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "18",
+      "name": "Upload AI Image to ImgBB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.imgbb.com/1/upload?key={{$env.IMGBB_API_KEY}}",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "image",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "5",
+      "name": "Generate AI Caption + Hashtags (Groq / Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.LLM_BASE_URL}}/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.LLM_MODEL, temperature: 0.7, messages: [ { role: 'system', content: 'You write concise, factual Instagram captions for Califnco water purification systems. Use ONLY the facts provided. Never invent specifications, certifications, health claims or discounts. Max 450 characters before hashtags. End with 8-12 relevant hashtags.' }, { role: 'user', content: 'Product: ' + $('Select product (dedupe)').first().json.name + '\\nCategory: ' + $('Select product (dedupe)').first().json.category + '\\nPrice (INR, excl GST): ' + $('Select product (dedupe)').first().json.price + '\\nDescription: ' + $('Select product (dedupe)').first().json.description + '\\nSpecs: ' + $('Select product (dedupe)').first().json.specs } ] }) }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE",
+          "name": "LLM API key"
+        }
+      }
+    },
+    {
+      "id": "6",
+      "name": "Validate Caption & Resolve Image URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Select product (dedupe)').first().json;\nconst imgbb = $('Upload AI Image to ImgBB').first()?.json;\nconst aiUrl = imgbb?.data?.url || imgbb?.data?.display_url || '';\nconst finalImageUrl = /^https:\\/\\/.+\\.(jpe?g|png)(\\?.*)?$/i.test(aiUrl) ? aiUrl : p.image_url;\nconst caption = ($('Generate AI Caption + Hashtags (Groq / Gemini)').first().json.choices?.[0]?.message?.content || '').trim();\nconst tags = caption.match(/#\\w+/g) || [];\nconst banned = /(cure|guarantee[sd]? 100|100% pure|kills all|certified by|free shipping|% off|discount)/i;\nconst errors = [];\nif (!/^https:\\/\\/.+\\.(jpe?g|png)(\\?.*)?$/i.test(finalImageUrl || '')) errors.push('missing public JPEG/PNG image URL');\nif (caption.length < 40 || caption.length > 2200) errors.push('caption length');\nif (tags.length < 3 || tags.length > 30) errors.push('hashtag count');\nif (banned.test(caption)) errors.push('unsupported claim');\nreturn [{ json: { ...p, image_url: finalImageUrl, ai_generated_image: !!aiUrl, caption, valid: errors.length === 0, validationErrors: errors.join(', ') } }];"
+      }
+    },
+    {
+      "id": "7",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.valid}}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "8",
+      "name": "Create media container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{$env.IG_USER_ID}}/media",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ image_url: $json.image_url, caption: $json.caption, access_token: $env.IG_ACCESS_TOKEN }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000
+    },
+    {
+      "id": "9",
+      "name": "Wait for processing",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1780,
+        -80
+      ],
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "10",
+      "name": "Check container status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        -80
+      ],
+      "parameters": {
+        "url": "=https://graph.facebook.com/v21.0/{{$('Create media container').first().json.id}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "status_code"
+            },
+            {
+              "name": "access_token",
+              "value": "={{$env.IG_ACCESS_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "11",
+      "name": "Publish to Instagram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{$env.IG_USER_ID}}/media_publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ creation_id: $('Create media container').first().json.id, access_token: $env.IG_ACCESS_TOKEN }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "19",
+      "name": "Post to WhatsApp Status (WAHA Bonus)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{($env.WAHA_BASE_URL || 'http://localhost:3000') + '/api/' + ($env.WAHA_SESSION || 'default') + '/status/image'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Api-Key",
+              "value": "={{$env.WAHA_API_KEY || ''}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ file: { mimetype: 'image/jpeg', url: $('Validate Caption & Resolve Image URL').first().json.image_url, filename: 'califnco-daily.jpg' }, caption: $('Validate Caption & Resolve Image URL').first().json.caption }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "12",
+      "name": "Build log row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Validate Caption & Resolve Image URL').first().json;\nconst create = $('Create media container').first().json;\nconst status = $('Check container status').first().json.status_code;\nconst pub = $('Publish to Instagram').first().json;\nconst waha = $('Post to WhatsApp Status (WAHA Bonus)').first()?.json;\nconst ok = !!pub.id && status === 'FINISHED';\nconst apiErr = pub.error || create.error || (status && status !== 'FINISHED' ? { message: 'container status ' + status } : null);\nconst tokenExpired = apiErr && (apiErr.code === 190 || /access token/i.test(apiErr.message || ''));\nreturn [{ json: { timestamp: new Date().toISOString(), sku: p.sku, product: p.name, media_url: p.image_url, ai_image: p.ai_generated_image, caption: p.caption, ig_media_id: pub.id || '', waha_status: waha?.id ? 'posted' : 'skipped_or_failed', status: ok ? 'published' : (tokenExpired ? 'token_expired' : 'failed'), error: apiErr ? JSON.stringify(apiErr).slice(0, 500) : '' } }];"
+      }
+    },
+    {
+      "id": "13",
+      "name": "Log result",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2880,
+        -80
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.SHEET_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "PostLog"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        }
+      }
+    },
+    {
+      "id": "14",
+      "name": "Log rejected caption",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1560,
+        100
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.SHEET_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "PostLog"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{$now.toISO()}}",
+            "sku": "={{$json.sku}}",
+            "product": "={{$json.name}}",
+            "media_url": "={{$json.image_url}}",
+            "caption": "={{$json.caption}}",
+            "status": "rejected_validation",
+            "error": "={{$json.validationErrors}}"
+          }
+        }
+      }
+    },
+    {
+      "id": "15",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "16",
+      "name": "Log workflow error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{$env.SHEET_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "PostLog"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{$now.toISO()}}",
+            "status": "failed",
+            "error": "={{String($json.execution.error.message).slice(0,500)}}"
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 10:00 IST": {
+      "main": [
+        [
+          {
+            "node": "Read PostLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Products": {
+      "main": [
+        [
+          {
+            "node": "Select product (dedupe)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read PostLog": {
+      "main": [
+        [
+          {
+            "node": "Read Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select product (dedupe)": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Product Image (Hugging Face)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Product Image (Hugging Face)": {
+      "main": [
+        [
+          {
+            "node": "Upload AI Image to ImgBB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload AI Image to ImgBB": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Caption + Hashtags (Groq / Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Caption + Hashtags (Groq / Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Validate Caption & Resolve Image URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Caption & Resolve Image URL": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Create media container",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log rejected caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create media container": {
+      "main": [
+        [
+          {
+            "node": "Wait for processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for processing": {
+      "main": [
+        [
+          {
+            "node": "Check container status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check container status": {
+      "main": [
+        [
+          {
+            "node": "Publish to Instagram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish to Instagram": {
+      "main": [
+        [
+          {
+            "node": "Post to WhatsApp Status (WAHA Bonus)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to WhatsApp Status (WAHA Bonus)": {
+      "main": [
+        [
+          {
+            "node": "Build log row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build log row": {
+      "main": [
+        [
+          {
+            "node": "Log result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Log workflow error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "tags": [],
+  "meta": {
+    "note": "Includes Scheduled Daily Cron + Hugging Face AI Image Gen + ImgBB Hosting + Groq/Gemini AI Caption & Hashtags + Meta Graph Instagram Publish + WAHA WhatsApp Status Bonus."
+  }
+}

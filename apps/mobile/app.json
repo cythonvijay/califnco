@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "CALIFNCO",
+    "slug": "califnco-mobile",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "califnco",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.califnco.mobile"
+    },
+    "android": {
+      "package": "com.califnco.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#F4F8FB",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      },
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "icon": "./assets/icon.png",
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 250,
+          "resizeMode": "contain",
+          "backgroundColor": "#F4F8FB"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "969e9ad8-3837-4c61-b9df-de977ffa51b7"
+      }
+    }
+  }
+}

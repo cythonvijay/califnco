@@ -1,0 +1,32 @@
+{
+  "name": "califnco",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "packages/*",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/web",
+    "dev:vercel": "cross-env VITE_DISABLE_HMR=1 npm run dev -w apps/web",
+    "build": "npm run build -w apps/web",
+    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w apps/web && tsc -p api/tsconfig.json --noEmit",
+    "test": "npm run test -w packages/shared",
+    "test:rules": "firebase emulators:exec --only firestore \"vitest run --config tests/rules/vitest.config.ts\"",
+    "seed": "tsx scripts/seed.ts",
+    "set-admin": "tsx scripts/set-admin.ts"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "@types/node": "^20.14.0",
+    "@vercel/node": "^3.2.0",
+    "cross-env": "^10.1.0",
+    "firebase": "^10.12.0",
+    "firebase-admin": "^12.2.0",
+    "firebase-tools": "^13.12.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0",
+    "zod": "^3.23.8"
+  }
+}
