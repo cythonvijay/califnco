@@ -171,7 +171,8 @@ export default function Product() {
                 style={{ flex: 1 }}
                 disabled={p.stock === 0 || price === null || !published}
                 onClick={() => {
-                  cart.add(p.sku, qty);
+                  // Buy Now replaces checkout contents with exactly the chosen quantity.
+                  cart.buyNow(p.sku, qty);
                   nav('/checkout');
                 }}
               >
