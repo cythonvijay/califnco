@@ -22,7 +22,9 @@ export function ProductCard({
   const defaultQty = wholesale ? 10 : 1;
 
   function handleBuyNow() {
-    cart.add(p.sku, defaultQty);
+    // Start checkout with this product only, using its intended default quantity.
+    // Do not add to an existing line from a previous cart session.
+    cart.buyNow(p.sku, defaultQty);
     nav('/checkout');
   }
 
