@@ -115,10 +115,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setLoading(false);
           return;
         }
-        const r = await resolveFirebaseRole(u, false);
-        setUser({ uid: u.uid, email: u.email, displayName: u.displayName });
-        setRole(r);
-        setLoading(false);
+        try {
+          const r = await resolveFirebaseRole(u, false);
+          setUser({ uid: u.uid, email: u.email, displayName: u.displayName });
+          setRole(r);
+        } catch (error) {
+          // Keep a valid Firebase session usable as a customer if role metadata cannot be refreshed.
+          // Never leave the entire app stuck in its initial loading state.
+          console.error('Could not resolve account role:', error);
+          setUser({ uid: u.uid, email: u.email, displayName: u.displayName });
+          setRole('customer');
+        } finally {
+          setLoading(false);
+        }
       });
     }
 
