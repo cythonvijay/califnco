@@ -28,7 +28,7 @@ service cloud.firestore {
         && onlyKeys(['displayName', 'email', 'phone', 'createdAt', 'prefs', 'referralCode', 'referredBy', 'fcmTokens'])
         && request.resource.data.email == request.auth.token.email;
       allow update: if (isOwner(uid) && unchanged(['email', 'createdAt', 'referralCode', 'role'])
-        && onlyKeys(['displayName', 'email', 'phone', 'createdAt', 'prefs', 'referralCode', 'referredBy', 'fcmTokens']))
+        && onlyKeys(['displayName', 'email', 'phone', 'createdAt', 'prefs', 'referralCode', 'referredBy', 'fcmTokens', 'role']))
         || isAdmin();
       match /addresses/{id} {
         allow read, write: if isOwner(uid) || isAdmin();
@@ -53,7 +53,11 @@ service cloud.firestore {
     }
 
     match /carts/{uid} {
-      allow read, write: if isOwner(uid) && request.resource.data.keys().hasOnly(['lines', 'updatedAt'])
+      // Reads do not have request.resource; authorize owner reads separately.
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['lines', 'updatedAt'])
+        && request.resource.data.lines is list
         && request.resource.data.lines.size() <= 100;
       allow delete: if isOwner(uid);
     }
