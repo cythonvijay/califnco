@@ -37,7 +37,7 @@ import {
   type ServiceStatus,
   type Totals,
 } from '@califnco/shared';
-import { auth, db, firebaseConfigured } from './firebase';
+import { auth, db, firebaseConfigured, firebaseConfigError } from './firebase';
 import { productImage } from './images';
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api';
@@ -63,6 +63,9 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error ?? 'Request failed.');
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new ApiError(res.status, `API endpoint ${BASE}${path} returned an invalid response.`);
+  }
   return data as T;
 }
 
@@ -752,6 +755,13 @@ export async function createValidatedOrder(
   caller: CallerIdentity | null,
   payload: { lines: CartLine[]; address: Address; idempotencyKey: string },
 ): Promise<CreateOrderResult> {
+  if (import.meta.env.PROD && (!firebaseConfigured || !db)) {
+    throw new RepoError(
+      'missing_config',
+      firebaseConfigError ??
+        'Production checkout is disabled because Firebase is unavailable. Configure the VITE_FIREBASE_* variables in Vercel and redeploy.',
+    );
+  }
   const user = requireSignedIn(caller);
   const effRole: Role = user.role === 'dealer' ? 'dealer' : 'customer';
   const lineErrors = validateLines(payload.lines, effRole);
@@ -962,17 +972,24 @@ export async function saveUserProfile(
 ): Promise<void> {
   const user = requireSignedIn(caller);
   if (firebaseConfigured && db) {
-    await setDoc(
-      doc(db, 'users', user.uid),
-      {
-        displayName: patch.displayName.trim(),
-        phone: patch.phone.trim(),
-        prefs: patch.prefs,
+    const profileRef = doc(db, 'users', user.uid);
+    const profilePatch = {
+      displayName: patch.displayName.trim(),
+      phone: patch.phone.trim(),
+      prefs: patch.prefs,
+    };
+    const existing = await getDoc(profileRef);
+    if (existing.exists()) {
+      // Do not rewrite immutable email/createdAt/referralCode/role fields.
+      await updateDoc(profileRef, profilePatch);
+    } else {
+      await setDoc(profileRef, {
+        ...profilePatch,
         email: user.email,
         createdAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
+        referralCode: user.uid.slice(0, 8).toUpperCase(),
+      });
+    }
     emitDbChange();
     return;
   }
