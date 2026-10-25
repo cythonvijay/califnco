@@ -81,11 +81,23 @@ export default function Checkout() {
         idempotencyKey: idemKey(JSON.stringify([lines, address.id])),
       });
 
-      if (res.mode === 'razorpay_payment_link_test' && res.paymentUrl) {
-        // Payment is completed on Razorpay's hosted page. The signed callback
-        // verifies the payment server-side before the confirmation page can say paid.
+      if (
+        (res.mode === 'razorpay_payment_link_test' || res.mode === 'razorpay_payment_link_live') &&
+        res.paymentUrl
+      ) {
+        // The signed server callback verifies payment before the order can be marked paid.
         window.location.assign(res.paymentUrl);
         return;
+      }
+
+      if (import.meta.env.PROD && res.mode === 'demo') {
+        throw new Error('The server returned a demo order instead of a Razorpay checkout link. No payment was taken; check Razorpay Production credentials.');
+      }
+      if (!res.orderId) {
+        throw new Error('The order API returned no order ID. Check the Vercel API deployment and response.');
+      }
+      if (res.mode !== 'demo' && !res.paymentUrl) {
+        throw new Error('Razorpay returned no payment URL. Check the Razorpay server credentials and deployment logs.');
       }
 
       cart.clear();
