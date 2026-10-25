@@ -142,12 +142,6 @@ export default function App() {
         return false;
       }
 
-      // Payment should open in a browser/payment-capable app.
-      if (isPaymentUrl(url)) {
-        void openExternal(url);
-        return false;
-      }
-
       // Allow regular web redirects, including canonical-host redirects,
       // authentication redirects, and website navigation.
       if (target.protocol === 'https:' || target.protocol === 'http:') {
@@ -182,21 +176,19 @@ export default function App() {
     (event: { nativeEvent: { targetUrl: string } }) => {
       const url = event.nativeEvent.targetUrl;
 
-      if (!url || url === 'about:blank') {
+      if (!url || url === 'about:blank' || url.startsWith('data:')) {
         return;
       }
 
-      // Keep regular website links and redirects inside the WebView.
-      if (
-        !isPaymentUrl(url) &&
-        (url.startsWith('https://') || url.startsWith('http://'))
-      ) {
+      // Keep website pages and hosted Razorpay checkout URLs inside the WebView.
+      if (/^https?:\/\//i.test(url)) {
         webViewRef.current?.injectJavaScript(
           `window.location.href = ${JSON.stringify(url)}; true;`,
         );
         return;
       }
 
+      // Route UPI intents and other app-specific links through Android.
       void openExternal(url);
     },
     [openExternal],
