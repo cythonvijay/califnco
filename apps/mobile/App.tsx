@@ -102,6 +102,7 @@ export default function App() {
   const pendingPaymentReturn = useRef(false);
 
   const [isLoading, setIsLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState(SITE_URL);
@@ -165,6 +166,7 @@ export default function App() {
     // Clear the overlay when WebView reports that navigation has finished.
     if (!nav.loading) {
       setIsLoading(false);
+      setHasLoadedOnce(true);
       setLoadFailed(false);
       setLoadError(null);
     }
@@ -246,7 +248,7 @@ export default function App() {
 
   // Show an error rather than leaving an endless loading screen.
   useEffect(() => {
-    if (!isLoading || loadFailed) {
+    if (!isLoading || loadFailed || hasLoadedOnce) {
       return;
     }
 
@@ -259,12 +261,13 @@ export default function App() {
     }, 25_000);
 
     return () => clearTimeout(timer);
-  }, [isLoading, loadFailed]);
+  }, [isLoading, loadFailed, hasLoadedOnce]);
 
   const retry = useCallback(() => {
     setLoadFailed(false);
     setLoadError(null);
     setCurrentUrl(SITE_URL);
+    setHasLoadedOnce(false);
     setIsLoading(true);
 
     webViewRef.current?.stopLoading();
@@ -306,13 +309,16 @@ export default function App() {
           onShouldStartLoadWithRequest={shouldStartLoad}
           onNavigationStateChange={onNavigationStateChange}
           onLoadStart={(event) => {
-            setIsLoading(true);
+            if (!hasLoadedOnce) {
+              setIsLoading(true);
+            }
             setLoadFailed(false);
             setLoadError(null);
             setCurrentUrl(event.nativeEvent.url || SITE_URL);
           }}
           onLoadEnd={() => {
             setIsLoading(false);
+            setHasLoadedOnce(true);
           }}
           onError={(event) => {
             const description = event.nativeEvent.description?.trim();
@@ -328,16 +334,6 @@ export default function App() {
                 : `Could not load ${failedUrl}`,
             );
           }}
-          renderLoading={() => (
-            <View style={styles.loading}>
-              <ActivityIndicator size="large" color={BRAND} />
-              <Text style={styles.loadingTitle}>Opening CALIFNCO</Text>
-              <Text style={styles.loadingText}>
-                Connecting to the live store…
-              </Text>
-            </View>
-          )}
-          startInLoadingState
           textZoom={100}
           automaticallyAdjustContentInsets={false}
           contentInsetAdjustmentBehavior="never"
@@ -345,20 +341,9 @@ export default function App() {
           accessibilityLabel="CALIFNCO website"
         />
 
-        {isLoading && !loadFailed && (
+        {isLoading && !loadFailed && !hasLoadedOnce && (
           <View pointerEvents="none" style={styles.loadingOverlay}>
-            <View style={styles.brandMark}>
-              <Text style={styles.brandText}>CALIFNCO</Text>
-              <View style={styles.brandUnderline} />
-            </View>
-
             <ActivityIndicator size="large" color={BRAND} />
-
-            <Text style={styles.loadingTitle}>Opening CALIFNCO</Text>
-
-            <Text style={styles.loadingText}>
-              Connecting to the live CALIFNCO website…
-            </Text>
           </View>
         )}
 
@@ -425,13 +410,6 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
-  loading: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: BG,
-  },
 
   loadingOverlay: {
     ...StyleSheet.absoluteFill,
@@ -459,20 +437,6 @@ const styles = StyleSheet.create({
     width: 54,
     borderRadius: 2,
     backgroundColor: ICE,
-  },
-
-  loadingTitle: {
-    color: BRAND,
-    fontSize: 17,
-    fontWeight: '800',
-    marginTop: 6,
-  },
-
-  loadingText: {
-    color: '#4E6378',
-    textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: 24,
   },
 
   failureOverlay: {
