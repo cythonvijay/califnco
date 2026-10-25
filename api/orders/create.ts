@@ -126,9 +126,44 @@ export default route('POST', async (req) => {
     ? { id: order.payment.razorpayPaymentLinkId, short_url: order.payment.paymentUrl }
     : undefined;
   if (key && order.status === 'pending_payment' && !paymentLink) {
-    const link = await createRazorpayPaymentLink(callbackBase!, order.totals.totalPaise, orderId, key, {
-      name: body.address.fullName, email: caller.email, contact: body.address.phone,
-    });
+    let link: { id: string; short_url: string };
+    try {
+      link = await createRazorpayPaymentLink(callbackBase!, order.totals.totalPaise, orderId, key, {
+        name: body.address.fullName, email: caller.email, contact: body.address.phone,
+      });
+    } catch (gatewayError) {
+      // A failed payment-link request must not leave a pending order consuming stock.
+      // Existing pending orders without a stored link are also cleaned up on retry.
+      try {
+        await db.runTransaction(async (tx) => {
+          const currentSnap = await tx.get(ref);
+          const current = currentSnap.data();
+          if (!currentSnap.exists || !current) return;
+
+          // Another concurrent request may already have attached a valid payment link.
+          if (current.payment?.paymentUrl || current.payment?.status === 'paid_verified') return;
+
+          const productSnaps = await Promise.all(
+            body.lines.map((line) => tx.get(db.doc(`products/${line.sku}`))),
+          );
+
+          body.lines.forEach((line, index) => {
+            const productSnap = productSnaps[index]!;
+            if (productSnap.exists) {
+              tx.update(productSnap.ref, { stock: FieldValue.increment(line.qty) });
+            }
+          });
+          tx.delete(ref);
+        });
+      } catch (rollbackError) {
+        console.error('Failed to release stock after Razorpay link creation failed', {
+          orderId,
+          error: rollbackError instanceof Error ? rollbackError.message : 'Unknown rollback error',
+        });
+      }
+      throw gatewayError;
+    }
+
     paymentLink = { id: link.id, short_url: link.short_url };
     await ref.update({
       'payment.razorpayPaymentLinkId': link.id,
