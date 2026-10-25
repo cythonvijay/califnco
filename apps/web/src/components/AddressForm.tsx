@@ -17,6 +17,7 @@ export function AddressForm({ initial, submitLabel = 'Save address', withMap, on
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(initial?.lat != null && initial?.lng != null ? { lat: initial.lat, lng: initial.lng } : null);
   const [errors, setErrors] = useState<Errors>({});
   const [mapMsg, setMapMsg] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
   const last = useRef(0);
   const set = (k: string) => (e: { target: { value: string } }) => setV((s) => ({ ...s, [k]: e.target.value }));
@@ -35,11 +36,22 @@ export function AddressForm({ initial, submitLabel = 'Save address', withMap, on
     finally { setLooking(false); }
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     const parsed = addressSchema.safeParse({ ...v, ...(geo ?? {}) });
-    if (!parsed.success) { const m: Errors = {}; parsed.error.issues.forEach((i) => { m[i.path[0] as keyof Address] ??= i.message; }); setErrors(m); return; }
-    setErrors({}); void onSubmit(parsed.data);
+    if (!parsed.success) {
+      const m: Errors = {};
+      parsed.error.issues.forEach((i) => { m[i.path[0] as keyof Address] ??= i.message; });
+      setErrors(m);
+      return;
+    }
+    setErrors({});
+    setSubmitError(null);
+    try {
+      await onSubmit(parsed.data);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Could not save this address. Please retry.');
+    }
   }
   const f = (k: keyof Address, label: string, extra: Record<string, string> = {}) => <Field label={label} error={errors[k]}><input value={v[k] ?? ''} onChange={set(k)} aria-invalid={!!errors[k]} {...extra} /></Field>;
   return (
@@ -55,7 +67,8 @@ export function AddressForm({ initial, submitLabel = 'Save address', withMap, on
           src={`https://www.openstreetmap.org/export/embed.html?bbox=${geo.lng - 0.01}%2C${geo.lat - 0.007}%2C${geo.lng + 0.01}%2C${geo.lat + 0.007}&layer=mapnik&marker=${geo.lat}%2C${geo.lng}`} />}
         <p className="muted" style={{ fontSize: 12 }}>Map data (c) OpenStreetMap contributors. Geocoding by Nominatim. Map use is optional.</p>
       </div>}
-      <button className="btn" disabled={busy}>{busy ? 'Saving...' : submitLabel}</button>
+      {submitError && <Notice kind="bad">{submitError}</Notice>}
+      <button className="btn" disabled={busy || looking}>{busy ? 'Saving...' : submitLabel}</button>
     </form>
   );
 }
