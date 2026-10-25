@@ -36,8 +36,36 @@ async function createRazorpayPaymentLink(baseUrl: string, amount: number, orderI
       callback_url: `${baseUrl}/api/payments/callback`, callback_method: 'get',
     }),
   });
-  if (!r.ok) throw new HttpError(502, 'Razorpay could not create the payment link. Your order is saved as pending payment; retry checkout.');
-  return (await r.json()) as { id: string; short_url: string; status: string; amount: number };
+  const responseBody = await r.json().catch(() => null) as
+    | { error?: { code?: unknown; description?: unknown; field?: unknown } }
+    | null;
+  if (!r.ok) {
+    const code = typeof responseBody?.error?.code === 'string'
+      ? responseBody.error.code
+      : 'RAZORPAY_API_ERROR';
+    const description = typeof responseBody?.error?.description === 'string'
+      ? responseBody.error.description.replace(/[\\r\\n]+/g, ' ').slice(0, 280)
+      : 'Razorpay returned an error without a description.';
+    // Never log or return credentials. These fields are Razorpay's non-secret diagnostic response.
+    console.error('Razorpay payment-link creation failed', {
+      httpStatus: r.status,
+      code,
+      description,
+      field: typeof responseBody?.error?.field === 'string' ? responseBody.error.field : undefined,
+      mode: k.mode,
+    });
+    throw new HttpError(
+      502,
+      `Razorpay rejected payment-link creation (HTTP ${r.status}, ${code}): ${description}. Check that RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are the matching active keys from the same Razorpay mode/account.`,
+    );
+  }
+
+  const data = responseBody as unknown as { id?: string; short_url?: string; status?: string; amount?: number };
+  if (!data?.id || !data.short_url) {
+    console.error('Razorpay payment-link response was missing id/short_url', { httpStatus: r.status });
+    throw new HttpError(502, 'Razorpay returned a successful response without a payment-link URL. Check the Razorpay dashboard and server logs before retrying.');
+  }
+  return data as { id: string; short_url: string; status: string; amount: number };
 }
 
 export default route('POST', async (req) => {
