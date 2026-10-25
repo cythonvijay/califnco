@@ -87,8 +87,11 @@ export default function ProfilePage() {
         prefs: p!.prefs,
       });
       setMsg({ k: 'ok', t: 'Profile saved.' });
-    } catch {
-      setMsg({ k: 'bad', t: 'Could not save profile changes. Please try again.' });
+    } catch (error) {
+      setMsg({
+        k: 'bad',
+        t: error instanceof Error ? error.message : 'Could not save profile changes. Please try again.',
+      });
     }
   }
 
@@ -228,9 +231,17 @@ export default function ProfilePage() {
         onCancel={() => setDel(null)}
         onConfirm={async () => {
           if (!del) return;
-          await deleteUserAddress(caller, del);
-          setDel(null);
-          addrs.reload();
+          try {
+            await deleteUserAddress(caller, del);
+            setDel(null);
+            addrs.reload();
+            setMsg({ k: 'ok', t: 'Address deleted.' });
+          } catch (error) {
+            setMsg({
+              k: 'bad',
+              t: error instanceof Error ? error.message : 'Could not delete the address. Please retry.',
+            });
+          }
         }}
       />
     </div>
