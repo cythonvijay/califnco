@@ -1134,16 +1134,9 @@ export async function decideDealerApplicationAdmin(
 ): Promise<void> {
   const admin = requireAdminCaller(caller);
   if (firebaseConfigured && db) {
-    try {
-      await apiPost('/admin/dealer-decision', { uid, decision });
-    } catch {
-      await updateDoc(doc(db, 'dealerApplications', uid), {
-        status: decision,
-        decidedBy: admin.uid,
-        decidedAt: serverTimestamp(),
-      });
-      await setDoc(doc(db, 'users', uid), { role: decision === 'approved' ? 'dealer' : 'customer' }, { merge: true });
-    }
+    // Role changes must go through the trusted Admin SDK endpoint so claims and
+    // the Firestore profile stay consistent. Do not mask API failure with a partial client-side update.
+    await apiPost('/admin/dealer-decision', { uid, decision });
     emitDbChange();
     return;
   }
