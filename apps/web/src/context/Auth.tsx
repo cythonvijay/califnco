@@ -10,7 +10,7 @@ import {
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { resolveEffectiveRole, roleFromClaims, type Role } from '@califnco/shared';
-import { auth, db, firebaseConfigured } from '../lib/firebase';
+import { auth, db, firebaseConfigured, firebaseConfigError } from '../lib/firebase';
 import { DB_CHANGE_EVENT, loadLocalDb, saveLocalDb, type CallerIdentity } from '../lib/api';
 
 export interface AppUser {
@@ -39,6 +39,15 @@ export const useAuth = () => {
 };
 
 const LOCAL_SESSION_KEY = 'califnco.auth.session.v2';
+
+function assertFirebaseAvailableForProduction(): void {
+  if (import.meta.env.PROD && (!firebaseConfigured || !auth || !db)) {
+    throw new Error(
+      firebaseConfigError ??
+        'Firebase is unavailable in this production build. Verify VITE_FIREBASE_* variables in Vercel and redeploy.',
+    );
+  }
+}
 
 function loadLocalSession(): { uid: string } | null {
   try {
@@ -69,7 +78,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true);
 
   const syncLocalUser = useCallback(() => {
-    if (firebaseConfigured) return;
+    if (firebaseConfigured && auth && db) return;
+    if (import.meta.env.PROD) {
+      setUser(null);
+      setRole('customer');
+      setLoading(false);
+      return;
+    }
     const sess = loadLocalSession();
     if (!sess) {
       setUser(null);
@@ -123,6 +138,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRole(r);
       return r;
     }
+    if (import.meta.env.PROD) {
+      assertFirebaseAvailableForProduction();
+      setRole('customer');
+      return 'customer';
+    }
     const sess = loadLocalSession();
     if (!sess) return 'customer';
     const state = loadLocalDb();
@@ -175,7 +195,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // Local Persistence Mode registration
+        assertFirebaseAvailableForProduction();
+        // Local Persistence Mode registration is allowed only in development.
         const state = loadLocalDb();
         const exists = Object.values(state.users).some((u) => u.email.toLowerCase() === cleanEmail);
         if (exists) {
@@ -235,7 +256,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return r;
         }
 
-        // Local Persistence Mode login
+        assertFirebaseAvailableForProduction();
+        // Local Persistence Mode login is allowed only in development.
         const state = loadLocalDb();
         const match = Object.values(state.users).find((u) => u.email.toLowerCase() === cleanEmail);
         if (!match || (match.password && match.password !== password)) {
@@ -274,6 +296,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await sendPasswordResetEmail(auth, email.trim());
           return;
         }
+        assertFirebaseAvailableForProduction();
         const state = loadLocalDb();
         const match = Object.values(state.users).find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
         if (!match && !email.includes('@')) {
