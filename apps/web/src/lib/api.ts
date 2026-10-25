@@ -61,8 +61,22 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   } catch {
     throw new ApiError(0, 'Network error. Check your connection and try again.');
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, data.error ?? 'Request failed.');
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    throw new ApiError(
+      res.status,
+      `API endpoint ${BASE}${path} returned a non-JSON response (HTTP ${res.status}). Check Vercel API routing/deployment; the submission was not accepted.`,
+    );
+  }
+  if (!res.ok) {
+    const message =
+      data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
+        ? data.error
+        : `API request failed with HTTP ${res.status}.`;
+    throw new ApiError(res.status, message);
+  }
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new ApiError(res.status, `API endpoint ${BASE}${path} returned an invalid response.`);
   }
@@ -103,7 +117,7 @@ export interface OrderRecord {
   address: Address;
   status: OrderStatus;
   payment: {
-    provider: 'razorpay_test' | 'razorpay_payment_link_test' | 'demo';
+    provider: 'razorpay_test' | 'razorpay_payment_link_test' | 'razorpay_payment_link_live' | 'demo';
     status: PaymentStatus;
     razorpayOrderId?: string;
     razorpayPaymentId?: string;
@@ -746,7 +760,7 @@ function hashIdem(input: string): string {
 
 export interface CreateOrderResult {
   orderId: string;
-  mode: 'demo' | 'razorpay_payment_link_test';
+  mode: 'demo' | 'razorpay_payment_link_test' | 'razorpay_payment_link_live';
   totalPaise: number;
   paymentUrl?: string | null;
 }
