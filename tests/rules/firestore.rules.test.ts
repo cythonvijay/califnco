@@ -9,6 +9,15 @@ beforeAll(async () => {
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
     await setDoc(doc(db, 'dealerPrices/CF-P-RO7'), { sku: 'CF-P-RO7', pricePaise: 1 });
+    await setDoc(doc(db, 'users/alice'), {
+      displayName: 'Alice',
+      email: 'a@x.com',
+      phone: '9876543210',
+      createdAt: 1,
+      prefs: { email: true, push: false, sms: false },
+      referralCode: 'ALICE001',
+    });
+    await setDoc(doc(db, 'carts/alice'), { lines: [{ sku: 'CF-P-RO7', qty: 1 }], updatedAt: 1 });
     await setDoc(doc(db, 'orders/o1'), { uid: 'alice', status: 'placed', totals: { totalPaise: 100 } });
     await setDoc(doc(db, 'products/CF-P-RO7'), { pricePaise: 100, stock: 1, name: 'x' });
     await setDoc(doc(db, 'serviceBookings/s1'), { uid: 'alice', status: 'requested', createdAt: 1, address: {} });
@@ -29,6 +38,24 @@ describe('firestore rules', () => {
     await assertSucceeds(getDoc(doc(dealer(), 'dealerPrices/CF-P-RO7')));
     await assertSucceeds(getDoc(doc(admin(), 'dealerPrices/CF-P-RO7')));
   });
+  it('allows owners to read and update their persisted cart, but not another user\'s cart', async () => {
+    await assertSucceeds(getDoc(doc(customer(), 'carts/alice')));
+    await assertSucceeds(updateDoc(doc(customer(), 'carts/alice'), {
+      lines: [{ sku: 'CF-P-RO7', qty: 2 }],
+      updatedAt: 2,
+    }));
+    await assertFails(getDoc(doc(env.authenticatedContext('mallory').firestore(), 'carts/alice')));
+  });
+
+  it('allows profile edits without rewriting immutable metadata', async () => {
+    await assertSucceeds(updateDoc(doc(customer(), 'users/alice'), {
+      displayName: 'Alice Updated',
+      phone: '9876543210',
+      prefs: { email: false, push: false, sms: false },
+    }));
+    await assertFails(updateDoc(doc(customer(), 'users/alice'), { createdAt: 2 }));
+  });
+
   it('prevents clients from creating or editing orders', async () => {
     await assertFails(setDoc(doc(customer(), 'orders/o2'), { uid: 'alice', status: 'placed' }));
     await assertFails(updateDoc(doc(customer(), 'orders/o1'), { 'totals.totalPaise': 1 }));
